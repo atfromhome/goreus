@@ -1,0 +1,45 @@
+name: Test Suite
+
+on:
+  push:
+    branches:
+      - main
+      - "release/**"
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go-test:
+    name: Go Test (${{ matrix.os }} / ${{ matrix.go }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        go: [1.25.x, 1.24.x, 1.23.x]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          check-latest: true
+          cache: true
+
+      - name: Show Go env
+        run: |
+          go version
+          go env
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run tests (all packages)
+        run: go test ./... -race -coverprofile=coverage.out -covermode=atomic

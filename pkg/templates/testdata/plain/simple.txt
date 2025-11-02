@@ -1,0 +1,5 @@
+{{ define "simple" }}
+Hello, {{ .Name }}!
+
+This is a simple plaintext template.
+{{ end }}
