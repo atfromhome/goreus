@@ -8,6 +8,7 @@ Repositori ini berisi kumpulan paket Go yang dapat digunakan untuk kebutuhan pem
 - pkg/storage — driver penyimpanan (S3/R2/local/null) dengan dukungan streaming
 - pkg/mail — pengirim email minimal (SMTP/SES/null) dengan pembangun MIME
 - pkg/templates — manajer template dengan helpers, caching, dan metrik
+- pkg/jsonull — tipe nullable generik untuk JSON dengan logika tiga-state
 
 Setiap paket dirancang agar kecil, berfokus pada satu tujuan, dan mudah diintegrasikan.
 
@@ -17,6 +18,7 @@ Setiap paket dirancang agar kecil, berfokus pada satu tujuan, dan mudah diintegr
 - [Storage](./pkg/storage/README.md): driver penyimpanan pluggable (S3/R2/local/null) dengan dukungan streaming  
 - [Mail](./pkg/mail/README.md): pengirim email (SMTP/SES/null) + pembangun MIME  
 - [Templates](./pkg/templates/README.md): template HTML/plaintext dengan helpers dan metrik  
+- [JsonNull](./pkg/jsonull/README.md): tipe nullable generik untuk JSON dengan logika tiga-state (not present, null, value)  
 
 ## Instalasi
 
@@ -34,6 +36,7 @@ import (
   "github.com/atfromhome/goreus/pkg/storage"
   "github.com/atfromhome/goreus/pkg/mail"
   "github.com/atfromhome/goreus/pkg/templates"
+  "github.com/atfromhome/goreus/pkg/jsonull"
 )
 ```
 
@@ -82,6 +85,27 @@ mgr, _ := templates.New(templates.Config{
 tmpl, _ := mgr.LoadHTML("emails/welcome.html", "layouts/base.html")
 out, _ := mgr.RenderHTML(tmpl, "welcome.html", map[string]any{"Name": "Alice"})
 _ = out
+```
+
+- JsonNull
+
+```go
+type User struct {
+  Name  string                    `json:"name"`
+  Email jsonull.JsonNull[string]  `json:"email,omitempty"`
+}
+
+// Field dengan nilai
+json.Unmarshal([]byte(`{"name":"John","email":"john@example.com"}`), &user)
+user.Email.IsSet() // true, user.Email.Value = "john@example.com"
+
+// Field bernilai null
+json.Unmarshal([]byte(`{"name":"Jane","email":null}`), &user)
+user.Email.IsNull() // true
+
+// Field tidak ada
+json.Unmarshal([]byte(`{"name":"Bob"}`), &user)
+user.Email.Present // false
 ```
 
 ## Pengembangan
