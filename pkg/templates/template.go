@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"embed"
 	"fmt"
+	htmltemplate "html/template"
+	"io"
 	"io/fs"
 	"log/slog"
 	"path/filepath"
@@ -13,10 +15,17 @@ import (
 	"time"
 )
 
+// TemplateExecutor interface that both html/template and text/template satisfy
+type TemplateExecutor interface {
+	ExecuteTemplate(wr io.Writer, name string, data any) error
+	Name() string
+}
+
 // Manager mengelola HTML dan plaintext templates dengan caching, helpers, dan metrics
 type Manager struct {
-	htmlTmpls    map[string]*template.Template
+	htmlTmpls    map[string]*htmltemplate.Template
 	plainTmpls   map[string]*template.Template
+	baseHtml     *htmltemplate.Template
 	fs           embed.FS
 	templatesDir string
 	mu           sync.RWMutex
@@ -38,10 +47,11 @@ type Metrics struct {
 
 // Config untuk inisialisasi Manager
 type Config struct {
-	FS           embed.FS
-	TemplatesDir string
-	Logger       *slog.Logger
-	Helpers      template.FuncMap
+	FS               embed.FS
+	TemplatesDir     string
+	Logger           *slog.Logger
+	Helpers          template.FuncMap
+	GlobalComponents []string // Glob patterns for global HTML components (e.g. "components/*.html")
 }
 
 // New membuat Manager baru dengan pre-load semua templates
@@ -60,9 +70,24 @@ func New(cfg Config) (*Manager, error) {
 		helpers[k] = v
 	}
 
+	// Initialize base HTML template with helpers and global components
+	baseHtml := htmltemplate.New("base").Funcs(helpers)
+	if len(cfg.GlobalComponents) > 0 {
+		var patterns []string
+		for _, p := range cfg.GlobalComponents {
+			patterns = append(patterns, filepath.ToSlash(filepath.Join(cfg.TemplatesDir, p)))
+		}
+		var err error
+		baseHtml, err = baseHtml.ParseFS(cfg.FS, patterns...)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse global components: %w", err)
+		}
+	}
+
 	m := &Manager{
-		htmlTmpls:    make(map[string]*template.Template),
+		htmlTmpls:    make(map[string]*htmltemplate.Template),
 		plainTmpls:   make(map[string]*template.Template),
+		baseHtml:     baseHtml,
 		fs:           cfg.FS,
 		templatesDir: cfg.TemplatesDir,
 		logger:       cfg.Logger,
@@ -118,10 +143,20 @@ func (m *Manager) preloadAllTemplates() error {
 
 // loadHTMLTemplate load single HTML template dengan support nested layouts
 func (m *Manager) loadHTMLTemplate(path string, relPath string) error {
-	tmpl := template.New(filepath.Base(path))
-	tmpl.Funcs(m.helpers)
-
-	tmpl, err := tmpl.ParseFS(m.fs, path)
+	// Clone from base to get helpers and global components
+	tmpl, err := m.baseHtml.Clone()
+	if err != nil {
+		return err
+	}
+	
+	// Set name to relative path for consistency
+	// Note: The main template name will still be what ParseFS determines (usually the filename),
+	// but we store it with the relPath key. 
+	// To enforce the name, we would need to manually parse string content, but ParseFS is preferred.
+	// We can wrap the execution to use the correct template if we know it.
+	
+	// Parse the specific file
+	tmpl, err = tmpl.ParseFS(m.fs, path)
 	if err != nil {
 		return err
 	}
@@ -151,10 +186,15 @@ func (m *Manager) loadPlainTemplate(path string, relPath string) error {
 }
 
 // LoadHTML load atau get cached HTML template dengan layout support
-// layoutPaths adalah optional paths ke layout files (diload dulu sebelum template utama)
-func (m *Manager) LoadHTML(templatePath string, layoutPaths ...string) (*template.Template, error) {
+// layoutPaths bisa berupa full paths atau glob patterns
+func (m *Manager) LoadHTML(templatePath string, layoutPatterns ...string) (*htmltemplate.Template, error) {
+	key := templatePath
+	if len(layoutPatterns) > 0 {
+		key += "::" + strings.Join(layoutPatterns, "::")
+	}
+
 	m.mu.RLock()
-	if tmpl, ok := m.htmlTmpls[templatePath]; ok {
+	if tmpl, ok := m.htmlTmpls[key]; ok {
 		m.mu.RUnlock()
 		m.recordHit("html")
 		return tmpl, nil
@@ -163,31 +203,43 @@ func (m *Manager) LoadHTML(templatePath string, layoutPaths ...string) (*templat
 
 	m.recordMiss("html")
 
-	files := make([]string, 0, len(layoutPaths)+1)
-	for _, layout := range layoutPaths {
-		files = append(files, filepath.Join(m.templatesDir, layout))
+	// Clone from base
+	tmpl, err := m.baseHtml.Clone()
+	if err != nil {
+		return nil, fmt.Errorf("failed to clone base template: %w", err)
 	}
-	files = append(files, filepath.Join(m.templatesDir, templatePath))
 
-	tmpl := template.New(filepath.Base(templatePath))
-	tmpl.Funcs(m.helpers)
+	// Prepare patterns: main file + layouts
+	patterns := make([]string, 0, len(layoutPatterns)+1)
+	patterns = append(patterns, filepath.ToSlash(filepath.Join(m.templatesDir, templatePath)))
+	
+	for _, layout := range layoutPatterns {
+		// Assume patterns are relative to templatesDir if not absolute (embed fs always relative to root)
+		// But here user likely passes "components/*.html" relative to templatesDir
+		patterns = append(patterns, filepath.ToSlash(filepath.Join(m.templatesDir, layout)))
+	}
 
-	tmpl, err := tmpl.ParseFS(m.fs, files...)
+	tmpl, err = tmpl.ParseFS(m.fs, patterns...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse HTML template %s: %w", templatePath, err)
 	}
 
 	m.mu.Lock()
-	m.htmlTmpls[templatePath] = tmpl
+	m.htmlTmpls[key] = tmpl
 	m.mu.Unlock()
 
 	return tmpl, nil
 }
 
 // LoadPlaintext load atau get cached plaintext template dengan layout support
-func (m *Manager) LoadPlaintext(templatePath string, layoutPaths ...string) (*template.Template, error) {
+func (m *Manager) LoadPlaintext(templatePath string, layoutPatterns ...string) (*template.Template, error) {
+	key := templatePath
+	if len(layoutPatterns) > 0 {
+		key += "::" + strings.Join(layoutPatterns, "::")
+	}
+
 	m.mu.RLock()
-	if tmpl, ok := m.plainTmpls[templatePath]; ok {
+	if tmpl, ok := m.plainTmpls[key]; ok {
 		m.mu.RUnlock()
 		m.recordHit("plain")
 		return tmpl, nil
@@ -196,11 +248,11 @@ func (m *Manager) LoadPlaintext(templatePath string, layoutPaths ...string) (*te
 
 	m.recordMiss("plain")
 
-	files := make([]string, 0, len(layoutPaths)+1)
-	for _, layout := range layoutPaths {
-		files = append(files, filepath.Join(m.templatesDir, layout))
+	files := make([]string, 0, len(layoutPatterns)+1)
+	for _, layout := range layoutPatterns {
+		files = append(files, filepath.ToSlash(filepath.Join(m.templatesDir, layout)))
 	}
-	files = append(files, filepath.Join(m.templatesDir, templatePath))
+	files = append(files, filepath.ToSlash(filepath.Join(m.templatesDir, templatePath)))
 
 	tmpl := template.New(filepath.Base(templatePath))
 	tmpl.Funcs(m.helpers)
@@ -211,7 +263,7 @@ func (m *Manager) LoadPlaintext(templatePath string, layoutPaths ...string) (*te
 	}
 
 	m.mu.Lock()
-	m.plainTmpls[templatePath] = tmpl
+	m.plainTmpls[key] = tmpl
 	m.mu.Unlock()
 
 	return tmpl, nil
@@ -219,7 +271,7 @@ func (m *Manager) LoadPlaintext(templatePath string, layoutPaths ...string) (*te
 
 // Render unified render method - render template dengan nama template utama
 // templateName default ke template name jika kosong
-func (m *Manager) Render(tmpl *template.Template, data any, templateName ...string) (string, error) {
+func (m *Manager) Render(tmpl TemplateExecutor, data any, templateName ...string) (string, error) {
 	name := tmpl.Name()
 	if len(templateName) > 0 && templateName[0] != "" {
 		name = templateName[0]
@@ -237,14 +289,35 @@ func (m *Manager) Render(tmpl *template.Template, data any, templateName ...stri
 	return buf.String(), nil
 }
 
-// RenderHTML render template HTML dengan nama template utama (backward compat)
-func (m *Manager) RenderHTML(tmpl *template.Template, templateName string, data any) (string, error) {
+// RenderHTML render template HTML
+func (m *Manager) RenderHTML(tmpl *htmltemplate.Template, templateName string, data any) (string, error) {
 	return m.Render(tmpl, data, templateName)
 }
 
-// RenderPlaintext render template plaintext dengan nama template utama (backward compat)
+// RenderPlaintext render template plaintext
 func (m *Manager) RenderPlaintext(tmpl *template.Template, templateName string, data any) (string, error) {
 	return m.Render(tmpl, data, templateName)
+}
+
+// DebugPrint prints the defined templates in the given template instance for debugging
+func (m *Manager) DebugPrint(tmpl TemplateExecutor) string {
+	var buf strings.Builder
+	buf.WriteString(fmt.Sprintf("Template: %s\n", tmpl.Name()))
+	
+	// html/template and text/template both have DefinedTemplates() string
+	// but it's not part of the interface we defined.
+	// We need type assertion.
+	
+	switch t := tmpl.(type) {
+	case *htmltemplate.Template:
+		buf.WriteString(t.DefinedTemplates())
+	case *template.Template:
+		buf.WriteString(t.DefinedTemplates())
+	default:
+		buf.WriteString("Unknown template type")
+	}
+	
+	return buf.String()
 }
 
 // ListHTML return list available HTML template keys
@@ -276,7 +349,7 @@ func (m *Manager) ClearCache() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.htmlTmpls = make(map[string]*template.Template)
+	m.htmlTmpls = make(map[string]*htmltemplate.Template)
 	m.plainTmpls = make(map[string]*template.Template)
 
 	m.logger.Debug("template cache cleared")
