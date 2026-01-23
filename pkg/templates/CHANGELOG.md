@@ -1,6 +1,6 @@
 # Changelog
 
-## [v1.1.0] - 2026-01-23
+## [v1.2.0] - 2026-01-23
 
 ### Added
 - **Global Components**: New `GlobalComponents` field in `Config` to pre-load shared components (e.g., "components/*.html").
