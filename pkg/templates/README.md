@@ -16,6 +16,9 @@ Prioritas:
 ## Fitur
 
 - API kecil dan konsisten: `New()`, `LoadHTML()`, `LoadPlaintext()`, `RenderHTML()`, `RenderPlaintext()`, `Render()`.
+- **XSS Protection**: Uses `html/template` for HTML files (context-aware escaping) and `text/template` for plaintext.
+- **Glob Support**: Load layouts and components using glob patterns (e.g., `LoadHTML("page.html", "components/*.html")`).
+- **Global Components**: Pre-load shared components via `Config.GlobalComponents` available to all templates.
 - Pre-load semua templates dari embed.FS saat init (tidak ada lazy-loading per-render).
 - Thread-safe dengan `sync.RWMutex` untuk concurrent rendering.
 - Auto-detect template tipe (HTML vs plaintext) berdasarkan file extension dan direktori.
@@ -25,6 +28,37 @@ Prioritas:
 - Comprehensive metrics: cache hit/miss, render count, error tracking, hit rate, slow render warnings.
 - Structured logging via `slog`.
 - Cache clearing dan reloading untuk development.
+
+---
+
+## Migration Guide (Breaking Changes)
+
+### Upgrade ke versi yang mendukung XSS Protection
+
+Versi terbaru menggunakan `html/template` untuk keamanan yang lebih baik.
+
+**1. Perubahan Tipe Return `LoadHTML`**
+Method `LoadHTML` sekarang mengembalikan `*html/template.Template` (sebelumnya `*text/template.Template`).
+
+*   **Code dengan `:=` (Aman):**
+    ```go
+    // Tidak perlu ubah apa-apa
+    tmpl, err := mgr.LoadHTML("page.html")
+    ```
+
+*   **Code dengan Explicit Type (Perlu Update):**
+    ```go
+    // LAMA
+    var tmpl *text.Template
+    tmpl, _ = mgr.LoadHTML(...)
+
+    // BARU
+    var tmpl *html.Template
+    tmpl, _ = mgr.LoadHTML(...)
+    ```
+
+**2. Render Interface**
+Method `Render` sekarang menerima interface internal `TemplateExecutor`. Code yang memanggil `mgr.Render(tmpl, data)` secara langsung tidak akan terdampak.
 
 ---
 
@@ -56,7 +90,7 @@ Rekomendasi untuk development:
 
 ### Antarmuka Manager
 
-- `LoadHTML(templatePath string, layoutPaths ...string) (*template.Template, error)` — load atau get cached HTML template dengan optional layouts.
+- `LoadHTML(templatePath string, layoutPatterns ...string) (*htmltemplate.Template, error)` — load atau get cached HTML template dengan optional layouts (supports glob patterns like "components/*.html").
 - `LoadPlaintext(templatePath string, layoutPaths ...string) (*template.Template, error)` — load atau get cached plaintext template dengan optional layouts.
 - `RenderHTML(tmpl *template.Template, templateName string, data any) (string, error)` — render HTML template dengan data.
 - `RenderPlaintext(tmpl *template.Template, templateName string, data any) (string, error)` — render plaintext template dengan data.
@@ -67,16 +101,18 @@ Rekomendasi untuk development:
 - `RegisterHelper(name string, fn any)` — register custom helper function.
 - `ClearCache()` — clear semua cached templates.
 - `Reload() error` — clear cache dan re-load semua templates dari FS.
+- `DebugPrint(tmpl TemplateExecutor) string` — returns a string with defined templates for debugging.
 
 ### Tipe
 
 ```go
 // Config untuk inisialisasi Manager
 type Config struct {
-    FS           embed.FS
-    TemplatesDir string
-    Logger       *slog.Logger         // optional; default: slog.Default()
-    Helpers      template.FuncMap     // optional; custom helpers
+    FS               embed.FS
+    TemplatesDir     string
+    Logger           *slog.Logger         // optional; default: slog.Default()
+    Helpers          template.FuncMap     // optional; custom helpers
+    GlobalComponents []string             // optional; glob patterns for global components (e.g. "components/*.html")
 }
 
 // Manager mengelola templates dengan caching dan metrics
