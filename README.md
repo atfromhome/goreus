@@ -9,6 +9,7 @@ Repositori ini berisi kumpulan paket Go yang dapat digunakan untuk kebutuhan pem
 - pkg/mail — pengirim email minimal (SMTP/SES/null) dengan pembangun MIME
 - pkg/templates — manajer template dengan helpers, caching, dan metrik
 - pkg/jsonull — tipe nullable generik untuk JSON dengan logika tiga-state
+- pkg/pgxscan — pemetaan otomatis hasil query pgx ke struct via tag `db`
 
 Setiap paket dirancang agar kecil, berfokus pada satu tujuan, dan mudah diintegrasikan.
 
@@ -19,6 +20,7 @@ Setiap paket dirancang agar kecil, berfokus pada satu tujuan, dan mudah diintegr
 - [Mail](./pkg/mail/README.md): pengirim email (SMTP/SES/null) + pembangun MIME  
 - [Templates](./pkg/templates/README.md): template HTML/plaintext dengan helpers dan metrik  
 - [JsonNull](./pkg/jsonull/README.md): tipe nullable generik untuk JSON dengan logika tiga-state (not present, null, value)  
+- [PgxScan](./pkg/pgxscan/README.md): pemetaan otomatis hasil query pgx ke struct, dengan dukungan nested struct dan JSON array  
 
 ## Instalasi
 
@@ -37,6 +39,7 @@ import (
   "github.com/atfromhome/goreus/pkg/mail"
   "github.com/atfromhome/goreus/pkg/templates"
   "github.com/atfromhome/goreus/pkg/jsonull"
+  "github.com/atfromhome/goreus/pkg/pgxscan"
 )
 ```
 
@@ -106,6 +109,19 @@ user.Email.IsNull() // true
 // Field tidak ada
 json.Unmarshal([]byte(`{"name":"Bob"}`), &user)
 user.Email.Present // false
+```
+
+- PgxScan
+
+```go
+type Order struct {
+  ID     int                          `db:"id"`
+  Status string                       `db:"status"`
+  Tags   pgxscan.JsonSlice[string]    `db:"tags"`
+}
+
+rows, _ := pool.Query(ctx, "SELECT id, status, tags FROM orders")
+orders, err := pgx.CollectRows(rows, pgxscan.RowToStruct[Order])
 ```
 
 ## Pengembangan

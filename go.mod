@@ -1,8 +1,6 @@
 module github.com/atfromhome/goreus
 
-go 1.23
-
-toolchain go1.24.9
+go 1.25.0
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.39.5
@@ -10,6 +8,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.18.20
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.89.1
 	github.com/aws/aws-sdk-go-v2/service/sesv2 v1.54.1
+	github.com/jackc/pgx/v5 v5.9.2
 )
 
 require (
@@ -27,4 +26,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.35.4 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.39.0 // indirect
 	github.com/aws/smithy-go v1.23.1 // indirect
+	github.com/jackc/pgpassfile v1.0.0 // indirect
+	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
+	golang.org/x/text v0.29.0 // indirect
 )
