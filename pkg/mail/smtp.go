@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
+	netmail "net/mail"
 	"net/smtp"
 	"strings"
 	"time"
@@ -51,6 +52,20 @@ func (m *SMTPMailer) Send(ctx context.Context, msg *Message) error {
 	}
 	if from == "" {
 		return fmt.Errorf("smtp: from is empty")
+	}
+
+	// envelopeFrom adalah ALAMAT MURNI untuk perintah SMTP MAIL FROM, terpisah
+	// dari `from` yang dipakai BuildMime untuk header MIME From (boleh berformat
+	// "Nama <alamat>"). net/smtp.Client.Mail mengirim argumennya apa adanya di
+	// dalam "MAIL FROM:<...>", jadi memberinya string berformat nama menghasilkan
+	// kurung siku bersarang -- perintah SMTP yang tidak valid.
+	//
+	// Kegagalan parse dibiarkan lewat dengan envelopeFrom = from, sama seperti
+	// perilaku sebelum perubahan ini: masukan yang sudah rusak hari ini tidak
+	// mendadak berhenti terkirim gara-gara ParseAddress lebih ketat.
+	envelopeFrom := from
+	if addr, err := netmail.ParseAddress(from); err == nil {
+		envelopeFrom = addr.Address
 	}
 
 	// Kumpulkan seluruh penerima (envelope) termasuk Cc dan Bcc
@@ -135,7 +150,7 @@ func (m *SMTPMailer) Send(ctx context.Context, msg *Message) error {
 	}
 
 	// Envelope
-	if err := client.Mail(from); err != nil {
+	if err := client.Mail(envelopeFrom); err != nil {
 		return fmt.Errorf("smtp: MAIL FROM: %w", err)
 	}
 	for _, rcpt := range rcpts {
